@@ -1,3 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/keycard-core"]
+members = [
+    "crates/keycard-core",
+    "crates/keycard-cli",
+    "apps/keycard-app/src-tauri",
+]

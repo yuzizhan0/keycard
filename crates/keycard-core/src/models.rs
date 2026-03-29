@@ -1,7 +1,7 @@
 //! Plain metadata types (no ciphertext or secret fields).
 
 /// Public metadata for an API key entry — **never** includes nonce, ciphertext, or plaintext secret.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct EntryMeta {
     pub id: String,
     pub provider: Option<String>,
@@ -11,7 +11,7 @@ pub struct EntryMeta {
 }
 
 /// A named environment profile (`OPENAI_API_KEY` → entry id mappings are stored separately).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ProfileMeta {
     pub id: String,
     pub name: String,

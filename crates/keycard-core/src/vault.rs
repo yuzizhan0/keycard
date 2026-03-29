@@ -18,8 +18,12 @@ use crate::KeycardError;
 pub const META_SCHEMA_VERSION: &str = "schema_version";
 /// `meta.key` for Argon2 salt (value: random bytes, 16 bytes in v1).
 pub const META_KDF_SALT: &str = "kdf_salt";
+/// Encrypted sentinel proving the master password (nonce + ciphertext in separate rows).
+pub const META_PW_VERIFY_NONCE: &str = "pw_verify_nonce";
+pub const META_PW_VERIFY_CIPHER: &str = "pw_verify_cipher";
 
 const KDF_SALT_LEN: usize = 16;
+const PW_VERIFY_PLAIN: &[u8] = b"KEYCARD_V1";
 
 fn now_millis() -> i64 {
     SystemTime::now()
@@ -28,9 +32,18 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
+/// `true` if `path` exists and contains `kdf_salt` in `meta`.
+pub fn is_vault_initialized(path: &Path) -> Result<bool, KeycardError> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let conn = open_vault(path)?;
+    Ok(meta_get(&conn, META_KDF_SALT)?.is_some())
+}
+
 /// Create a new vault at `path`: parent directories, DB schema, random KDF salt, and schema version.
 ///
-/// `password` must be non-empty (reserved for future verification flows; v1 only stores the salt).
+/// `password` must be non-empty. Stores KDF salt plus an encrypted verifier so [`Vault::unlock`] can reject wrong passwords.
 ///
 /// Returns [`KeycardError::VaultAlreadyInitialized`] if `kdf_salt` is already set.
 pub fn init_vault(path: &Path, password: &[u8]) -> Result<(), KeycardError> {
@@ -46,6 +59,9 @@ pub fn init_vault(path: &Path, password: &[u8]) -> Result<(), KeycardError> {
     }
     let mut salt = [0u8; KDF_SALT_LEN];
     OsRng.fill_bytes(&mut salt);
+    let master = derive_master_key(password, &salt)?;
+    let dek = derive_dek(&master)?;
+    let (pw_nonce, pw_ct) = seal_secret(&dek, PW_VERIFY_PLAIN)?;
     let tx = conn.transaction()?;
     tx.execute(
         "INSERT INTO meta (key, value) VALUES (?1, ?2)",
@@ -54,6 +70,14 @@ pub fn init_vault(path: &Path, password: &[u8]) -> Result<(), KeycardError> {
     tx.execute(
         "INSERT INTO meta (key, value) VALUES (?1, ?2)",
         (META_KDF_SALT, salt.as_slice()),
+    )?;
+    tx.execute(
+        "INSERT INTO meta (key, value) VALUES (?1, ?2)",
+        (META_PW_VERIFY_NONCE, pw_nonce.as_slice()),
+    )?;
+    tx.execute(
+        "INSERT INTO meta (key, value) VALUES (?1, ?2)",
+        (META_PW_VERIFY_CIPHER, pw_ct.as_slice()),
     )?;
     tx.commit()?;
     Ok(())
@@ -79,6 +103,20 @@ impl Vault {
         let salt = meta_get(&self.conn, META_KDF_SALT)?.ok_or(KeycardError::VaultNotInitialized)?;
         let master = derive_master_key(password, &salt)?;
         let dek = derive_dek(&master)?;
+        match (
+            meta_get(&self.conn, META_PW_VERIFY_NONCE)?,
+            meta_get(&self.conn, META_PW_VERIFY_CIPHER)?,
+        ) {
+            (Some(nonce), Some(ct)) => match open_secret(&dek, &nonce, &ct) {
+                Ok(p) if p.as_slice() == PW_VERIFY_PLAIN => {}
+                Ok(_) => return Err(KeycardError::VaultCorrupt),
+                Err(_) => return Err(KeycardError::WrongMasterPassword),
+            },
+            (None, None) => {
+                // Legacy vaults without verifier (pre-v1 migration); accept unlock.
+            }
+            _ => return Err(KeycardError::VaultCorrupt),
+        }
         Ok(UnlockedVault {
             conn: self.conn,
             dek: Zeroizing::new(dek),
@@ -93,8 +131,32 @@ pub struct UnlockedVault {
 }
 
 impl UnlockedVault {
-    pub(crate) fn dek_for_crypto(&self) -> &[u8; 32] {
+    /// Expose the DEK for session persistence (e.g. desktop shell holding `path` + DEK).
+    pub fn dek_for_crypto(&self) -> &[u8; 32] {
         self.dek.as_ref()
+    }
+
+    /// Open the vault file again with a known DEK (e.g. GUI holding only the key material).
+    pub fn reopen(path: &Path, dek: &[u8; 32]) -> Result<Self, KeycardError> {
+        let conn = open_vault(path)?;
+        Ok(Self {
+            conn,
+            dek: Zeroizing::new(*dek),
+        })
+    }
+
+    /// Resolve profile by exact `id` or unique `name`.
+    pub fn resolve_profile_id(&self, name_or_id: &str) -> Result<String, KeycardError> {
+        self.conn
+            .query_row(
+                "SELECT id FROM profiles WHERE id = ?1 OR name = ?1 LIMIT 1",
+                [name_or_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => KeycardError::ProfileNotFound,
+                _ => e.into(),
+            })
     }
 
     /// Insert a new encrypted entry (`secret` is sealed with the vault DEK).
@@ -297,6 +359,28 @@ impl UnlockedVault {
         if !stmt.exists([entry_id])? {
             return Err(KeycardError::EntryNotFound);
         }
+        Ok(())
+    }
+
+    /// Read UI/settings key from `app_settings` (plain string value).
+    pub fn get_app_setting(&self, key: &str) -> Result<Option<String>, KeycardError> {
+        match self.conn.query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [key],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn set_app_setting(&mut self, key: &str, value: &str) -> Result<(), KeycardError> {
+        self.conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )?;
         Ok(())
     }
 }

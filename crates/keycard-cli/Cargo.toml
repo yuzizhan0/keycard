@@ -1,0 +1,18 @@
+[package]
+name = "keycard-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Keycard CLI: init vault, export env, run commands with profile"
+
+[[bin]]
+name = "keycard"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+keycard-core = { path = "../keycard-core" }
+rpassword = "7"
+
+[dev-dependencies]
+assert_cmd = "2"
+tempfile = "3"

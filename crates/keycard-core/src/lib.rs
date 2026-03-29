@@ -14,4 +14,6 @@ pub use error::KeycardError;
 pub use models::{EntryMeta, ProfileMeta};
 pub use paths::vault_db_path;
 pub use session::UnlockedDek;
-pub use vault::{init_vault, UnlockedVault, Vault, META_KDF_SALT, META_SCHEMA_VERSION};
+pub use vault::{
+    init_vault, is_vault_initialized, UnlockedVault, Vault, META_KDF_SALT, META_SCHEMA_VERSION,
+};

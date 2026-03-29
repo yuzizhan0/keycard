@@ -1,0 +1,18 @@
+[package]
+name = "keycard_app"
+version = "0.1.0"
+description = "Keycard desktop"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+keycard-core = { path = "../../../crates/keycard-core" }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-global-shortcut = "2"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

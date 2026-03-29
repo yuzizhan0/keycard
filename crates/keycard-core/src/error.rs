@@ -20,6 +20,10 @@ pub enum KeycardError {
     ProfileNotFound,
     /// Profile id or display name already exists.
     ProfileAlreadyExists,
+    /// Master password incorrect (unlock / verifier mismatch).
+    WrongMasterPassword,
+    /// Vault metadata inconsistent or tampered.
+    VaultCorrupt,
 }
 
 impl std::fmt::Display for KeycardError {
@@ -35,6 +39,8 @@ impl std::fmt::Display for KeycardError {
             KeycardError::EntryNotFound => write!(f, "entry not found"),
             KeycardError::ProfileNotFound => write!(f, "profile not found"),
             KeycardError::ProfileAlreadyExists => write!(f, "profile already exists"),
+            KeycardError::WrongMasterPassword => write!(f, "incorrect master password"),
+            KeycardError::VaultCorrupt => write!(f, "vault data is corrupt or incompatible"),
         }
     }
 }
@@ -51,7 +57,9 @@ impl std::error::Error for KeycardError {
             | KeycardError::InvalidPassword
             | KeycardError::EntryNotFound
             | KeycardError::ProfileNotFound
-            | KeycardError::ProfileAlreadyExists => None,
+            | KeycardError::ProfileAlreadyExists
+            | KeycardError::WrongMasterPassword
+            | KeycardError::VaultCorrupt => None,
         }
     }
 }

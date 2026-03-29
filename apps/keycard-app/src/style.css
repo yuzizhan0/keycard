@@ -1,0 +1,88 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #e8e8ec;
+  background: #121218;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  padding: 1rem;
+}
+h1 {
+  font-size: 1.25rem;
+  margin: 0 0 1rem;
+}
+section {
+  margin-bottom: 1.25rem;
+  padding: 1rem;
+  background: #1a1a22;
+  border-radius: 8px;
+}
+label {
+  display: block;
+  margin: 0.5rem 0 0.2rem;
+  font-size: 0.85rem;
+  color: #a0a0b0;
+}
+input,
+textarea,
+select,
+button {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid #333;
+  background: #0e0e12;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+  margin-top: 0.5rem;
+  background: #2a4a7a;
+  border-color: #3a5a9a;
+}
+button.secondary {
+  background: #333;
+  border-color: #444;
+}
+.row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.row > * {
+  flex: 1;
+  min-width: 120px;
+}
+.hint {
+  font-size: 0.8rem;
+  color: #c9a227;
+  margin-top: 0.35rem;
+}
+.err {
+  color: #e85d5d;
+  font-size: 0.9rem;
+  margin-top: 0.35rem;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+th,
+td {
+  text-align: left;
+  padding: 0.35rem 0.25rem;
+  border-bottom: 1px solid #2a2a32;
+}
+.toolbar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+.toolbar input[type="search"] {
+  flex: 1;
+}
