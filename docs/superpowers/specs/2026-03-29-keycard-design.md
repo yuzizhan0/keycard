@@ -36,7 +36,7 @@
 
 - 使用**单个 SQLite** 数据库文件；默认**文件名**为 `vault.db`，位于各平台**应用数据目录**下的 `Keycard/` 子目录（便于用户备份与排错）：
   - **macOS:** `~/Library/Application Support/Keycard/vault.db`
-  - **Linux:** `$XDG_DATA_HOME/keycard/vault.db`；若未设置 `XDG_DATA_HOME`，则为 `~/.local/share/keycard/vault.db`
+  - **Linux:** `$XDG_DATA_HOME/Keycard/vault.db`；若未设置 `XDG_DATA_HOME`，则为 `~/.local/share/Keycard/vault.db`
   - **Windows:** `%LOCALAPPDATA%\Keycard\vault.db`（通常为 `C:\Users\<用户>\AppData\Local\Keycard\vault.db`）
 
 ### 并发与数据库
@@ -139,3 +139,4 @@
 | ---------- | ----------------------------------------- |
 | 2026-03-29 | 初稿；用户整体验收 §1–§4                  |
 | 2026-03-29 | 规格审阅修订：路径、锁定行为、并发、密码学、CLI (a) 强制、验收标准 |
+| 2026-03-29 | 统一 Linux 数据目录名为 `Keycard`（与 §2 段首一致） |
