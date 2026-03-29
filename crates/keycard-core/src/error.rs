@@ -16,6 +16,10 @@ pub enum KeycardError {
     InvalidPassword,
     /// No row with the given entry id.
     EntryNotFound,
+    /// No profile with the given id.
+    ProfileNotFound,
+    /// Profile id or display name already exists.
+    ProfileAlreadyExists,
 }
 
 impl std::fmt::Display for KeycardError {
@@ -29,6 +33,8 @@ impl std::fmt::Display for KeycardError {
             KeycardError::VaultNotInitialized => write!(f, "vault not initialized"),
             KeycardError::InvalidPassword => write!(f, "invalid password"),
             KeycardError::EntryNotFound => write!(f, "entry not found"),
+            KeycardError::ProfileNotFound => write!(f, "profile not found"),
+            KeycardError::ProfileAlreadyExists => write!(f, "profile already exists"),
         }
     }
 }
@@ -43,7 +49,9 @@ impl std::error::Error for KeycardError {
             KeycardError::VaultAlreadyInitialized
             | KeycardError::VaultNotInitialized
             | KeycardError::InvalidPassword
-            | KeycardError::EntryNotFound => None,
+            | KeycardError::EntryNotFound
+            | KeycardError::ProfileNotFound
+            | KeycardError::ProfileAlreadyExists => None,
         }
     }
 }

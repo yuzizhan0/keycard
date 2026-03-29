@@ -9,3 +9,10 @@ pub struct EntryMeta {
     pub tags: Option<String>,
     pub created_at: i64,
 }
+
+/// A named environment profile (`OPENAI_API_KEY` → entry id mappings are stored separately).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileMeta {
+    pub id: String,
+    pub name: String,
+}

@@ -1,5 +1,6 @@
 //! First-time vault creation and password unlock (`UnlockedVault`).
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -9,7 +10,7 @@ use zeroize::Zeroizing;
 
 use crate::crypto::{derive_dek, derive_master_key, open_secret, seal_secret};
 use crate::db::open_vault;
-use crate::models::EntryMeta;
+use crate::models::{EntryMeta, ProfileMeta};
 use crate::session::UnlockedDek;
 use crate::KeycardError;
 
@@ -197,6 +198,107 @@ impl UnlockedVault {
         }
         Ok(())
     }
+
+    /// Create a profile (`id` and `name` must both be unused).
+    pub fn add_profile(&mut self, id: &str, name: &str) -> Result<(), KeycardError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT 1 FROM profiles WHERE id = ?1 OR name = ?2 LIMIT 1")?;
+        if stmt.exists((id, name))? {
+            return Err(KeycardError::ProfileAlreadyExists);
+        }
+        self.conn
+            .execute(
+                "INSERT INTO profiles (id, name) VALUES (?1, ?2)",
+                (id, name),
+            )
+            .map_err(KeycardError::from)?;
+        Ok(())
+    }
+
+    pub fn list_profiles(&self) -> Result<Vec<ProfileMeta>, KeycardError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name FROM profiles ORDER BY name ASC, id ASC")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ProfileMeta {
+                id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Map `env_var` → `entry_id` for this profile (upserts on duplicate `env_var`).
+    pub fn set_profile_env(
+        &mut self,
+        profile_id: &str,
+        env_var: &str,
+        entry_id: &str,
+    ) -> Result<(), KeycardError> {
+        self.ensure_profile_exists(profile_id)?;
+        self.ensure_entry_exists(entry_id)?;
+        self.conn.execute(
+            "INSERT INTO profile_env (profile_id, env_var, entry_id) VALUES (?1, ?2, ?3)
+             ON CONFLICT(profile_id, env_var) DO UPDATE SET entry_id = excluded.entry_id",
+            (profile_id, env_var, entry_id),
+        )?;
+        Ok(())
+    }
+
+    /// Environment variable name → entry id for `profile_id` (sorted by `env_var`).
+    pub fn profile_env_mappings(
+        &self,
+        profile_id: &str,
+    ) -> Result<BTreeMap<String, String>, KeycardError> {
+        self.ensure_profile_exists(profile_id)?;
+        let mut stmt = self.conn.prepare(
+            "SELECT env_var, entry_id FROM profile_env WHERE profile_id = ?1 ORDER BY env_var ASC",
+        )?;
+        let rows = stmt.query_map([profile_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut m = BTreeMap::new();
+        for r in rows {
+            let (k, v) = r?;
+            m.insert(k, v);
+        }
+        Ok(m)
+    }
+
+    pub fn delete_profile(&mut self, profile_id: &str) -> Result<(), KeycardError> {
+        let n = self
+            .conn
+            .execute("DELETE FROM profiles WHERE id = ?1", [profile_id])?;
+        if n == 0 {
+            return Err(KeycardError::ProfileNotFound);
+        }
+        Ok(())
+    }
+
+    fn ensure_profile_exists(&self, profile_id: &str) -> Result<(), KeycardError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT 1 FROM profiles WHERE id = ?1 LIMIT 1")?;
+        if !stmt.exists([profile_id])? {
+            return Err(KeycardError::ProfileNotFound);
+        }
+        Ok(())
+    }
+
+    fn ensure_entry_exists(&self, entry_id: &str) -> Result<(), KeycardError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT 1 FROM entries WHERE id = ?1 LIMIT 1")?;
+        if !stmt.exists([entry_id])? {
+            return Err(KeycardError::EntryNotFound);
+        }
+        Ok(())
+    }
 }
 
 fn meta_get(conn: &Connection, key: &str) -> Result<Option<Vec<u8>>, KeycardError> {
@@ -299,5 +401,38 @@ mod tests {
             crate::KeycardError::InvalidPassword => {}
             other => panic!("expected InvalidPassword, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn profile_maps_openai_key_to_entry() {
+        let path = temp_vault_path();
+        init_vault(&path, b"x").unwrap();
+        let mut u = Vault::open(&path).unwrap().unlock(b"x").unwrap();
+        let entry_id = Uuid::new_v4().to_string();
+        u.add_entry(&entry_id, Some("openai"), "default", None, b"sk-test")
+            .unwrap();
+        u.add_profile("p-dev", "dev").unwrap();
+        u.set_profile_env("p-dev", "OPENAI_API_KEY", &entry_id)
+            .unwrap();
+        let m = u.profile_env_mappings("p-dev").unwrap();
+        assert_eq!(m.get("OPENAI_API_KEY").map(String::as_str), Some(entry_id.as_str()));
+        assert_eq!(m.len(), 1);
+        // Upsert same env to same entry id (idempotent)
+        u.set_profile_env("p-dev", "OPENAI_API_KEY", &entry_id)
+            .unwrap();
+        assert_eq!(u.profile_env_mappings("p-dev").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn set_profile_env_requires_profile_and_entry() {
+        let path = temp_vault_path();
+        init_vault(&path, b"x").unwrap();
+        let mut u = Vault::open(&path).unwrap().unlock(b"x").unwrap();
+        u.add_profile("p1", "n1").unwrap();
+        let eid = Uuid::new_v4().to_string();
+        assert!(matches!(
+            u.set_profile_env("p1", "K", &eid),
+            Err(crate::KeycardError::EntryNotFound)
+        ));
     }
 }
