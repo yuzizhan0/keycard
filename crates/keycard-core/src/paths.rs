@@ -27,11 +27,12 @@ mod tests {
     #[test]
     fn vault_db_path_ends_with_keycard_vault_db() {
         let p = vault_db_path().expect("path");
-        assert!(
-            p.to_string_lossy().contains("Keycard"),
-            "expected Keycard in path, got {}",
-            p.display()
-        );
-        assert_eq!(p.file_name().unwrap(), "vault.db");
+        assert_eq!(p.file_name().expect("file name").to_str(), Some("vault.db"));
+        let keycard_dir = p
+            .parent()
+            .expect("Keycard directory")
+            .file_name()
+            .expect("Keycard segment");
+        assert_eq!(keycard_dir.to_str(), Some("Keycard"));
     }
 }
