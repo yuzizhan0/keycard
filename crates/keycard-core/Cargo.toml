@@ -1,0 +1,8 @@
+[package]
+name = "keycard-core"
+version = "0.1.0"
+edition = "2021"
+description = "Keycard vault core: paths, crypto, SQLite (library)"
+
+[dependencies]
+dirs = "6"
