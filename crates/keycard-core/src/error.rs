@@ -14,6 +14,8 @@ pub enum KeycardError {
     VaultNotInitialized,
     /// Empty master password (not allowed).
     InvalidPassword,
+    /// No row with the given entry id.
+    EntryNotFound,
 }
 
 impl std::fmt::Display for KeycardError {
@@ -26,6 +28,7 @@ impl std::fmt::Display for KeycardError {
             KeycardError::VaultAlreadyInitialized => write!(f, "vault already initialized"),
             KeycardError::VaultNotInitialized => write!(f, "vault not initialized"),
             KeycardError::InvalidPassword => write!(f, "invalid password"),
+            KeycardError::EntryNotFound => write!(f, "entry not found"),
         }
     }
 }
@@ -39,7 +42,8 @@ impl std::error::Error for KeycardError {
             KeycardError::Crypto(e) => Some(e),
             KeycardError::VaultAlreadyInitialized
             | KeycardError::VaultNotInitialized
-            | KeycardError::InvalidPassword => None,
+            | KeycardError::InvalidPassword
+            | KeycardError::EntryNotFound => None,
         }
     }
 }

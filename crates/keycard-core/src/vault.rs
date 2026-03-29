@@ -9,6 +9,7 @@ use zeroize::Zeroizing;
 
 use crate::crypto::{derive_dek, derive_master_key, open_secret, seal_secret};
 use crate::db::open_vault;
+use crate::models::EntryMeta;
 use crate::session::UnlockedDek;
 use crate::KeycardError;
 
@@ -18,6 +19,13 @@ pub const META_SCHEMA_VERSION: &str = "schema_version";
 pub const META_KDF_SALT: &str = "kdf_salt";
 
 const KDF_SALT_LEN: usize = 16;
+
+fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
 
 /// Create a new vault at `path`: parent directories, DB schema, random KDF salt, and schema version.
 ///
@@ -88,26 +96,24 @@ impl UnlockedVault {
         self.dek.as_ref()
     }
 
-    /// Encrypt `secret` and insert a row into `entries` (Task 4 / tests; public API for higher layers later).
-    pub fn add_encrypted_entry(
+    /// Insert a new encrypted entry (`secret` is sealed with the vault DEK).
+    pub fn add_entry(
         &mut self,
         id: &str,
         provider: Option<&str>,
         alias: &str,
+        tags: Option<&str>,
         secret: &[u8],
     ) -> Result<(), KeycardError> {
         let (nonce, ciphertext) = seal_secret(self.dek.as_ref(), secret)?;
-        let created_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
+        let created_at = now_millis();
         self.conn.execute(
             "INSERT INTO entries (id, provider, alias, tags, created_at, nonce, ciphertext) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             (
                 id,
                 provider,
                 alias,
-                Option::<&str>::None,
+                tags,
                 created_at,
                 &nonce,
                 &ciphertext,
@@ -116,17 +122,80 @@ impl UnlockedVault {
         Ok(())
     }
 
-    /// Read ciphertext for an entry (used in tests).
-    pub fn fetch_entry_ciphertext(
-        &self,
-        id: &str,
-    ) -> Result<(Vec<u8>, Vec<u8>), KeycardError> {
-        let (nonce, ct): (Vec<u8>, Vec<u8>) = self.conn.query_row(
+    /// List entry metadata only (no nonce, ciphertext, or plaintext secret).
+    pub fn list_entries_meta(&self) -> Result<Vec<EntryMeta>, KeycardError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, provider, alias, tags, created_at FROM entries ORDER BY created_at ASC, id ASC",
+        )?;
+        let mapped = stmt.query_map([], |row| {
+            Ok(EntryMeta {
+                id: row.get(0)?,
+                provider: row.get(1)?,
+                alias: row.get(2)?,
+                tags: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in mapped {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Decrypt and return the secret bytes for `id`.
+    pub fn get_entry_secret(&self, id: &str) -> Result<Vec<u8>, KeycardError> {
+        let (nonce, ciphertext): (Vec<u8>, Vec<u8>) = match self.conn.query_row(
             "SELECT nonce, ciphertext FROM entries WHERE id = ?1",
             [id],
             |row| Ok((row.get(0)?, row.get(1)?)),
+        ) {
+            Ok(v) => v,
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                return Err(KeycardError::EntryNotFound);
+            }
+            Err(e) => return Err(e.into()),
+        };
+        Ok(open_secret(self.dek.as_ref(), &nonce, &ciphertext)?)
+    }
+
+    pub fn delete_entry(&mut self, id: &str) -> Result<(), KeycardError> {
+        let n = self.conn.execute("DELETE FROM entries WHERE id = ?1", [id])?;
+        if n == 0 {
+            return Err(KeycardError::EntryNotFound);
+        }
+        Ok(())
+    }
+
+    /// Update non-secret fields only.
+    pub fn update_entry_meta(
+        &mut self,
+        id: &str,
+        provider: Option<&str>,
+        alias: &str,
+        tags: Option<&str>,
+    ) -> Result<(), KeycardError> {
+        let n = self.conn.execute(
+            "UPDATE entries SET provider = ?1, alias = ?2, tags = ?3 WHERE id = ?4",
+            (provider, alias, tags, id),
         )?;
-        Ok((nonce, ct))
+        if n == 0 {
+            return Err(KeycardError::EntryNotFound);
+        }
+        Ok(())
+    }
+
+    /// Replace ciphertext for an existing entry (re-encrypts `secret` with a fresh nonce).
+    pub fn set_entry_secret(&mut self, id: &str, secret: &[u8]) -> Result<(), KeycardError> {
+        let (nonce, ciphertext) = seal_secret(self.dek.as_ref(), secret)?;
+        let n = self.conn.execute(
+            "UPDATE entries SET nonce = ?1, ciphertext = ?2 WHERE id = ?3",
+            (&nonce, &ciphertext, id),
+        )?;
+        if n == 0 {
+            return Err(KeycardError::EntryNotFound);
+        }
+        Ok(())
     }
 }
 
@@ -142,7 +211,6 @@ fn meta_get(conn: &Connection, key: &str) -> Result<Option<Vec<u8>>, KeycardErro
 #[cfg(test)]
 mod tests {
     use super::{init_vault, Vault};
-    use crate::crypto::open_secret;
     use std::path::PathBuf;
 
     use tempfile::tempdir;
@@ -162,11 +230,52 @@ mod tests {
         let id = Uuid::new_v4().to_string();
         let secret = b"sk-dummy-secret-for-task4";
         unlocked
-            .add_encrypted_entry(&id, Some("openai"), "default", secret)
+            .add_entry(&id, Some("openai"), "default", None, secret)
             .expect("add");
-        let (nonce, ct) = unlocked.fetch_entry_ciphertext(&id).expect("fetch");
-        let out = open_secret(unlocked.dek_for_crypto(), &nonce, &ct).expect("open_secret");
+        let out = unlocked.get_entry_secret(&id).expect("get secret");
         assert_eq!(out, secret);
+    }
+
+    #[test]
+    fn list_entries_meta_contains_no_secret_substring() {
+        let path = temp_vault_path();
+        let password = b"p";
+        init_vault(&path, password).unwrap();
+        let vault = Vault::open(&path).unwrap();
+        let mut u = vault.unlock(password).unwrap();
+        let id = Uuid::new_v4().to_string();
+        let distinctive = b"XYZZY_PLAINTEXT_SECRET_99";
+        u.add_entry(&id, None, "a1", Some("t1"), distinctive)
+            .unwrap();
+        let metas = u.list_entries_meta().unwrap();
+        assert_eq!(metas.len(), 1);
+        let dump = format!("{metas:?}");
+        assert!(
+            !dump.contains("XYZZY"),
+            "list must not leak secret: {dump}"
+        );
+        assert_eq!(u.get_entry_secret(&id).unwrap(), distinctive);
+    }
+
+    #[test]
+    fn delete_update_entry() {
+        let path = temp_vault_path();
+        init_vault(&path, b"x").unwrap();
+        let mut u = Vault::open(&path).unwrap().unlock(b"x").unwrap();
+        let id = Uuid::new_v4().to_string();
+        u.add_entry(&id, Some("p"), "old", None, b"one").unwrap();
+        u.update_entry_meta(&id, Some("p2"), "new", Some("tag"))
+            .unwrap();
+        let m = u.list_entries_meta().unwrap();
+        assert_eq!(m[0].alias, "new");
+        assert_eq!(m[0].provider.as_deref(), Some("p2"));
+        u.set_entry_secret(&id, b"two").unwrap();
+        assert_eq!(u.get_entry_secret(&id).unwrap(), b"two");
+        u.delete_entry(&id).unwrap();
+        assert!(matches!(
+            u.get_entry_secret(&id),
+            Err(crate::KeycardError::EntryNotFound)
+        ));
     }
 
     #[test]
