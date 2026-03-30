@@ -2,6 +2,7 @@
 name = "keycard-cli"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "Keycard CLI: init vault, export env, run commands with profile"
 
 [[bin]]
@@ -12,6 +13,7 @@ path = "src/main.rs"
 clap = { version = "4", features = ["derive"] }
 keycard-core = { path = "../keycard-core" }
 rpassword = "7"
+serde_json = "1"
 
 [dev-dependencies]
 assert_cmd = "2"

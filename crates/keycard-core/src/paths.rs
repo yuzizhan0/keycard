@@ -20,6 +20,20 @@ pub fn vault_db_path() -> Result<PathBuf, KeycardError> {
     Ok(base.join("Keycard").join("vault.db"))
 }
 
+/// Parent directory of [`vault_db_path`] (`…/Keycard/`).
+pub fn keycard_data_dir() -> Result<PathBuf, KeycardError> {
+    vault_db_path()?
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or(KeycardError::DataDirNotFound)
+}
+
+/// Staging file: external tools (e.g. macOS Quick Action) write selected terminal text here;
+/// the app reads and deletes it to prefill the CLI command form.
+pub fn pending_cli_snippet_path() -> Result<PathBuf, KeycardError> {
+    Ok(keycard_data_dir()?.join("pending_cli_snippet.txt"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::vault_db_path;
@@ -34,5 +48,15 @@ mod tests {
             .file_name()
             .expect("Keycard segment");
         assert_eq!(keycard_dir.to_str(), Some("Keycard"));
+    }
+
+    #[test]
+    fn pending_cli_snippet_lives_in_keycard_dir() {
+        let p = super::pending_cli_snippet_path().expect("path");
+        assert_eq!(p.file_name().and_then(|n| n.to_str()), Some("pending_cli_snippet.txt"));
+        assert_eq!(
+            p.parent().and_then(|d| d.file_name()).and_then(|n| n.to_str()),
+            Some("Keycard")
+        );
     }
 }

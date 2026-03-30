@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use keycard_core::{
-    init_vault, is_vault_initialized, vault_db_path, EntryMeta, UnlockedVault, Vault,
+    init_vault, is_vault_initialized, pending_cli_snippet_path, vault_db_path, CliFavoriteMeta,
+    EntryMeta, ProfileMeta, UnlockedVault, Vault,
 };
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
@@ -121,10 +122,7 @@ fn set_setting_cmd(state: tauri::State<AppState>, key: String, value: String) ->
 
 #[tauri::command]
 fn read_clipboard_cmd(app: tauri::AppHandle) -> Result<String, String> {
-    app.clipboard()
-        .read_text()
-        .map_err(|e| e.to_string())
-        .map(|o| o.unwrap_or_default())
+    app.clipboard().read_text().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -132,6 +130,97 @@ fn write_clipboard_cmd(app: tauri::AppHandle, text: String) -> Result<(), String
     app.clipboard()
         .write_text(&text)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_profiles_json_cmd(state: tauri::State<AppState>) -> Result<Vec<ProfileMeta>, String> {
+    with_unlocked(&state, |v| v.list_profiles().map_err(|e| e.to_string()))
+}
+
+#[tauri::command]
+fn list_cli_favorites_json_cmd(
+    state: tauri::State<AppState>,
+) -> Result<Vec<CliFavoriteMeta>, String> {
+    with_unlocked(&state, |v| v.list_cli_favorites().map_err(|e| e.to_string()))
+}
+
+#[tauri::command]
+fn add_cli_favorite_cmd(
+    state: tauri::State<AppState>,
+    id: String,
+    name: String,
+    profile_id: Option<String>,
+    argv: Vec<String>,
+    notes: Option<String>,
+) -> Result<(), String> {
+    with_unlocked(&state, |mut v| {
+        let resolved = match profile_id
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            None => None,
+            Some(s) => Some(v.resolve_profile_id(s).map_err(|e| e.to_string())?),
+        };
+        v.add_cli_favorite(
+            &id,
+            &name,
+            resolved.as_deref(),
+            &argv,
+            notes.as_deref(),
+        )
+        .map_err(|e| e.to_string())
+    })
+}
+
+#[tauri::command]
+fn delete_cli_favorite_cmd(state: tauri::State<AppState>, id: String) -> Result<(), String> {
+    with_unlocked(&state, |mut v| v.delete_cli_favorite(&id).map_err(|e| e.to_string()))
+}
+
+/// Read and delete `pending_cli_snippet.txt` (written by macOS Quick Action / helper script).
+fn drain_pending_cli_snippet_from_disk() -> Result<Option<String>, String> {
+    let path = pending_cli_snippet_path().map_err(|e| e.to_string())?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let s = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&path);
+    let t = s.trim();
+    if t.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(t.to_string()))
+    }
+}
+
+#[tauri::command]
+fn take_pending_cli_snippet_cmd() -> Result<Option<String>, String> {
+    drain_pending_cli_snippet_from_disk()
+}
+
+/// When any window focuses while unlocked, pull the staging file and send it to the **main** webview.
+/// Avoids losing snippets when a `?quick=1` window (no CLI form) was frontmost — JS never called `take_pending` before.
+fn try_forward_pending_cli_to_main(app: &tauri::AppHandle, state: &AppState) {
+    let unlocked = state
+        .dek
+        .lock()
+        .map(|g| g.is_some())
+        .unwrap_or(false);
+    if !unlocked {
+        return;
+    }
+    let Some(text) = (match drain_pending_cli_snippet_from_disk() {
+        Ok(x) => x,
+        Err(_) => return,
+    }) else {
+        return;
+    };
+    let Some(main) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = main.emit("pending-cli-snippet", text);
+    let _ = main.set_focus();
 }
 
 fn main() {
@@ -155,6 +244,14 @@ fn main() {
                 .build(),
         )
         .manage(state.clone())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Focused(true) = event {
+                let app = window.app_handle().clone();
+                if let Some(s) = app.try_state::<AppState>() {
+                    try_forward_pending_cli_to_main(&app, &s);
+                }
+            }
+        })
         .setup(move |app| {
             let show = MenuItem::with_id(app, "show", "Open Keycard", true, None::<&str>)?;
             let quick = MenuItem::with_id(app, "quick", "Save clipboard…", true, None::<&str>)?;
@@ -211,6 +308,11 @@ fn main() {
             set_setting_cmd,
             read_clipboard_cmd,
             write_clipboard_cmd,
+            list_profiles_json_cmd,
+            list_cli_favorites_json_cmd,
+            add_cli_favorite_cmd,
+            delete_cli_favorite_cmd,
+            take_pending_cli_snippet_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

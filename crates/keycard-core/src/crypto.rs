@@ -3,7 +3,7 @@
 //! Parameters (document in README): Argon2id **m = 65536 KiB (64 MiB)**, **t = 3**, **p = 4**.
 
 use argon2::{Algorithm, Argon2, Params, Version};
-use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
+use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
 use sha2::Sha256;
@@ -19,7 +19,8 @@ const XNONCE_LEN: usize = 24;
 
 #[derive(Debug)]
 pub enum CryptoError {
-    Argon2(argon2::password_hash::Error),
+    /// Argon2 parameter or hashing error (unified `argon2::Error` in current crate versions).
+    Argon2(argon2::Error),
     Hkdf,
     Aead(chacha20poly1305::aead::Error),
     InvalidKeyLength,

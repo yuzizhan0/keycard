@@ -10,7 +10,7 @@ use zeroize::Zeroizing;
 
 use crate::crypto::{derive_dek, derive_master_key, open_secret, seal_secret};
 use crate::db::open_vault;
-use crate::models::{EntryMeta, ProfileMeta};
+use crate::models::{CliFavoriteMeta, EntryMeta, ProfileMeta};
 use crate::session::UnlockedDek;
 use crate::KeycardError;
 
@@ -53,7 +53,7 @@ pub fn init_vault(path: &Path, password: &[u8]) -> Result<(), KeycardError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let conn = open_vault(path)?;
+    let mut conn = open_vault(path)?;
     if meta_get(&conn, META_KDF_SALT)?.is_some() {
         return Err(KeycardError::VaultAlreadyInitialized);
     }
@@ -133,7 +133,7 @@ pub struct UnlockedVault {
 impl UnlockedVault {
     /// Expose the DEK for session persistence (e.g. desktop shell holding `path` + DEK).
     pub fn dek_for_crypto(&self) -> &[u8; 32] {
-        self.dek.as_ref()
+        &*self.dek
     }
 
     /// Open the vault file again with a known DEK (e.g. GUI holding only the key material).
@@ -168,7 +168,7 @@ impl UnlockedVault {
         tags: Option<&str>,
         secret: &[u8],
     ) -> Result<(), KeycardError> {
-        let (nonce, ciphertext) = seal_secret(self.dek.as_ref(), secret)?;
+        let (nonce, ciphertext) = seal_secret(self.dek_for_crypto(), secret)?;
         let created_at = now_millis();
         self.conn.execute(
             "INSERT INTO entries (id, provider, alias, tags, created_at, nonce, ciphertext) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -219,7 +219,7 @@ impl UnlockedVault {
             }
             Err(e) => return Err(e.into()),
         };
-        Ok(open_secret(self.dek.as_ref(), &nonce, &ciphertext)?)
+        Ok(open_secret(self.dek_for_crypto(), &nonce, &ciphertext)?)
     }
 
     pub fn delete_entry(&mut self, id: &str) -> Result<(), KeycardError> {
@@ -250,7 +250,7 @@ impl UnlockedVault {
 
     /// Replace ciphertext for an existing entry (re-encrypts `secret` with a fresh nonce).
     pub fn set_entry_secret(&mut self, id: &str, secret: &[u8]) -> Result<(), KeycardError> {
-        let (nonce, ciphertext) = seal_secret(self.dek.as_ref(), secret)?;
+        let (nonce, ciphertext) = seal_secret(self.dek_for_crypto(), secret)?;
         let n = self.conn.execute(
             "UPDATE entries SET nonce = ?1, ciphertext = ?2 WHERE id = ?3",
             (&nonce, &ciphertext, id),
@@ -383,6 +383,169 @@ impl UnlockedVault {
         )?;
         Ok(())
     }
+
+    /// List saved CLI commands (sorted for stable UI).
+    pub fn list_cli_favorites(&self) -> Result<Vec<CliFavoriteMeta>, KeycardError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, profile_id, argv_json, notes FROM cli_favorites ORDER BY sort_order ASC, name ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (id, name, profile_id, argv_json, notes) = r?;
+            let argv = parse_argv_json(&argv_json)?;
+            out.push(CliFavoriteMeta {
+                id,
+                name,
+                profile_id,
+                argv,
+                notes,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Insert a saved command. `name` must be unique. `argv` must be non-empty (program first).
+    pub fn add_cli_favorite(
+        &mut self,
+        id: &str,
+        name: &str,
+        profile_id: Option<&str>,
+        argv: &[String],
+        notes: Option<&str>,
+    ) -> Result<(), KeycardError> {
+        validate_cli_argv(argv)?;
+        if let Some(pid) = profile_id {
+            self.ensure_profile_exists(pid)?;
+        }
+        let argv_json = serde_json::to_string(argv).map_err(|_| KeycardError::InvalidCliFavorite)?;
+        let created_at = now_millis();
+        let next_sort: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM cli_favorites",
+            [],
+            |row| row.get(0),
+        )?;
+        let n = self.conn.execute(
+            "INSERT INTO cli_favorites (id, name, profile_id, argv_json, notes, created_at, sort_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            (
+                id,
+                name,
+                profile_id,
+                argv_json,
+                notes,
+                created_at,
+                next_sort,
+            ),
+        );
+        match n {
+            Ok(_) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                Err(KeycardError::CliFavoriteAlreadyExists)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn update_cli_favorite(
+        &mut self,
+        id: &str,
+        name: &str,
+        profile_id: Option<&str>,
+        argv: &[String],
+        notes: Option<&str>,
+    ) -> Result<(), KeycardError> {
+        validate_cli_argv(argv)?;
+        if let Some(pid) = profile_id {
+            self.ensure_profile_exists(pid)?;
+        }
+        let argv_json = serde_json::to_string(argv).map_err(|_| KeycardError::InvalidCliFavorite)?;
+        let n = self
+            .conn
+            .execute(
+                "UPDATE cli_favorites SET name = ?2, profile_id = ?3, argv_json = ?4, notes = ?5 WHERE id = ?1",
+                (id, name, profile_id, argv_json, notes),
+            )
+            .map_err(|e| {
+                if matches!(
+                    e,
+                    rusqlite::Error::SqliteFailure(ref se, _)
+                        if se.code == rusqlite::ErrorCode::ConstraintViolation
+                ) {
+                    KeycardError::CliFavoriteAlreadyExists
+                } else {
+                    e.into()
+                }
+            })?;
+        if n == 0 {
+            return Err(KeycardError::CliFavoriteNotFound);
+        }
+        Ok(())
+    }
+
+    pub fn delete_cli_favorite(&mut self, id: &str) -> Result<(), KeycardError> {
+        let n = self
+            .conn
+            .execute("DELETE FROM cli_favorites WHERE id = ?1", [id])?;
+        if n == 0 {
+            return Err(KeycardError::CliFavoriteNotFound);
+        }
+        Ok(())
+    }
+
+    /// Resolve saved command by exact `name` (for `keycard saved run <name>`).
+    pub fn get_cli_favorite_by_name(
+        &self,
+        name: &str,
+    ) -> Result<(Vec<String>, Option<String>), KeycardError> {
+        let row: Result<(String, Option<String>), rusqlite::Error> = self.conn.query_row(
+            "SELECT argv_json, profile_id FROM cli_favorites WHERE name = ?1",
+            [name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        );
+        match row {
+            Ok((argv_json, profile_id)) => {
+                let argv = parse_argv_json(&argv_json)?;
+                validate_cli_argv(&argv)?;
+                Ok((argv, profile_id))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Err(KeycardError::CliFavoriteNotFound),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
+fn validate_cli_argv(argv: &[String]) -> Result<(), KeycardError> {
+    if argv.is_empty() || argv.iter().any(|s| s.is_empty()) {
+        return Err(KeycardError::InvalidCliFavorite);
+    }
+    Ok(())
+}
+
+fn parse_argv_json(raw: &str) -> Result<Vec<String>, KeycardError> {
+    let v: serde_json::Value =
+        serde_json::from_str(raw).map_err(|_| KeycardError::InvalidCliFavorite)?;
+    let arr = v
+        .as_array()
+        .ok_or(KeycardError::InvalidCliFavorite)?;
+    let mut out = Vec::with_capacity(arr.len());
+    for x in arr {
+        let s = x
+            .as_str()
+            .ok_or(KeycardError::InvalidCliFavorite)?
+            .to_string();
+        out.push(s);
+    }
+    Ok(out)
 }
 
 fn meta_get(conn: &Connection, key: &str) -> Result<Option<Vec<u8>>, KeycardError> {
@@ -403,7 +566,7 @@ mod tests {
     use uuid::Uuid;
 
     fn temp_vault_path() -> PathBuf {
-        tempdir().expect("tempdir").into_path().join("vault.db")
+        tempdir().expect("tempdir").keep().join("vault.db")
     }
 
     #[test]
@@ -480,11 +643,10 @@ mod tests {
         let path = temp_vault_path();
         init_vault(&path, b"ok").unwrap();
         let vault = Vault::open(&path).unwrap();
-        let e = vault.unlock(b"").unwrap_err();
-        match e {
-            crate::KeycardError::InvalidPassword => {}
-            other => panic!("expected InvalidPassword, got {other:?}"),
-        }
+        assert!(matches!(
+            vault.unlock(b""),
+            Err(crate::KeycardError::InvalidPassword)
+        ));
     }
 
     #[test]
@@ -518,5 +680,31 @@ mod tests {
             u.set_profile_env("p1", "K", &eid),
             Err(crate::KeycardError::EntryNotFound)
         ));
+    }
+
+    #[test]
+    fn cli_favorites_roundtrip() {
+        let path = temp_vault_path();
+        init_vault(&path, b"x").unwrap();
+        let mut u = Vault::open(&path).unwrap().unlock(b"x").unwrap();
+        u.add_profile("p1", "dev").unwrap();
+        let argv = vec!["echo".to_string(), "hi".to_string()];
+        u.add_cli_favorite("f1", "hello", Some("p1"), &argv, None)
+            .unwrap();
+        let list = u.list_cli_favorites().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "hello");
+        assert_eq!(list[0].argv, argv);
+        let (gargv, pid) = u.get_cli_favorite_by_name("hello").unwrap();
+        assert_eq!(gargv, argv);
+        assert_eq!(pid.as_deref(), Some("p1"));
+        u.update_cli_favorite("f1", "hello", None, &argv, Some("note"))
+            .unwrap();
+        assert_eq!(
+            u.list_cli_favorites().unwrap()[0].profile_id,
+            None::<String>
+        );
+        u.delete_cli_favorite("f1").unwrap();
+        assert!(u.list_cli_favorites().unwrap().is_empty());
     }
 }

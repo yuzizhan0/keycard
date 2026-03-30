@@ -2,8 +2,10 @@
   "name": "keycard-app",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "scripts": {
+    "free-port": "sh -c 'for p in $(lsof -ti:1420 2>/dev/null); do kill -9 \"$p\"; done; exit 0'",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",

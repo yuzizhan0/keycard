@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+
+contact_links:
+  - name: Report a security vulnerability
+    url: https://docs.github.com/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability
+    about: >
+      Follow SECURITY.md in this repo (email or GitHub “Report a vulnerability” if enabled).
+      Do not use a public issue for undisclosed security bugs.

@@ -16,3 +16,13 @@ pub struct ProfileMeta {
     pub id: String,
     pub name: String,
 }
+
+/// Saved terminal command (`argv[0]` = program). Optional `profile_id` loads env like `keycard run -p`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct CliFavoriteMeta {
+    pub id: String,
+    pub name: String,
+    pub profile_id: Option<String>,
+    pub argv: Vec<String>,
+    pub notes: Option<String>,
+}

@@ -65,6 +65,17 @@ fn apply_schema_v1(conn: &Connection) -> Result<(), KeycardError> {
             key TEXT PRIMARY KEY NOT NULL,
             value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS cli_favorites (
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL UNIQUE,
+            profile_id TEXT,
+            argv_json TEXT NOT NULL,
+            notes TEXT,
+            created_at INTEGER NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL
+        );
         ",
     )?;
     Ok(())
@@ -78,7 +89,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn temp_vault_path() -> PathBuf {
-        tempdir().expect("tempdir").into_path().join("vault.db")
+        tempdir().expect("tempdir").keep().join("vault.db")
     }
 
     #[test]

@@ -3,4 +3,5 @@
 .DS_Store
 node_modules/
 dist/
-apps/keycard-app/dist/
+apps/keycard-app/dist/*
+!apps/keycard-app/dist/index.html

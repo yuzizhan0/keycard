@@ -1,5 +1,6 @@
 //! Keycard CLI — see README for `KEYCARD_ALLOW_ENV_PASSWORD` (testing only).
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -41,6 +42,22 @@ enum Commands {
         )]
         cmd: Vec<OsString>,
     },
+    /// List or run commands saved in the vault (see desktop app).
+    Saved {
+        #[command(subcommand)]
+        command: SavedCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum SavedCommands {
+    /// Print saved names, optional profile id, and argv (JSON array).
+    List,
+    /// Run a saved command by name (optional profile env from vault).
+    Run {
+        /// Saved command name (exact match).
+        name: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -63,6 +80,10 @@ fn run() -> Result<(), String> {
         Commands::Init => cmd_init(&vault_path),
         Commands::Env { profile } => cmd_env(&vault_path, &profile),
         Commands::Run { profile, cmd } => cmd_run(&vault_path, &profile, cmd),
+        Commands::Saved { command } => match command {
+            SavedCommands::List => cmd_saved_list(&vault_path),
+            SavedCommands::Run { name } => cmd_saved_run(&vault_path, &name),
+        },
     }
 }
 
@@ -90,19 +111,54 @@ fn cmd_run(path: &PathBuf, profile: &str, cmd: Vec<OsString>) -> Result<(), Stri
     }
     let pw = read_password("Master password: ")?;
     let v = open_unlocked(path, pw.as_bytes())?;
-    let map = env_map(&v, profile)?;
-    drop(v);
+    let status = spawn_with_profile_env(&v, Some(profile), cmd)?;
+    std::process::exit(status.code().unwrap_or(1));
+}
 
+fn cmd_saved_list(path: &PathBuf) -> Result<(), String> {
+    let pw = read_password("Master password: ")?;
+    let v = open_unlocked(path, pw.as_bytes())?;
+    for fav in v.list_cli_favorites().map_err(fmt_keycard_err)? {
+        let argv_json =
+            serde_json::to_string(&fav.argv).map_err(|e| e.to_string())?;
+        let prof = fav.profile_id.as_deref().unwrap_or("-");
+        println!("{}\t{}\t{}", fav.name, prof, argv_json);
+    }
+    Ok(())
+}
+
+fn cmd_saved_run(path: &PathBuf, name: &str) -> Result<(), String> {
+    let pw = read_password("Master password: ")?;
+    let v = open_unlocked(path, pw.as_bytes())?;
+    let (argv, profile_id) = v
+        .get_cli_favorite_by_name(name)
+        .map_err(fmt_keycard_err)?;
+    let cmd: Vec<OsString> = argv.into_iter().map(OsString::from).collect();
+    let status = spawn_with_profile_env(&v, profile_id.as_deref(), cmd)?;
+    std::process::exit(status.code().unwrap_or(1));
+}
+
+/// Merge optional Keycard profile env into current env and run `cmd` (non-empty argv).
+fn spawn_with_profile_env(
+    v: &UnlockedVault,
+    profile_name_or_id: Option<&str>,
+    cmd: Vec<OsString>,
+) -> Result<std::process::ExitStatus, String> {
+    let map: BTreeMap<String, String> = match profile_name_or_id {
+        Some(p) => env_map(v, p)?,
+        None => BTreeMap::new(),
+    };
     let mut it = cmd.into_iter();
-    let program = it.next().expect("non-empty");
+    let program = it
+        .next()
+        .ok_or_else(|| "missing program (empty argv)".to_string())?;
     let mut child = std::process::Command::new(program);
     child.args(it);
     child.envs(std::env::vars());
     for (k, val) in map {
         child.env(k, val);
     }
-    let status = child.status().map_err(|e| e.to_string())?;
-    std::process::exit(status.code().unwrap_or(1));
+    child.status().map_err(|e| e.to_string())
 }
 
 fn open_unlocked(path: &PathBuf, password: &[u8]) -> Result<UnlockedVault, String> {

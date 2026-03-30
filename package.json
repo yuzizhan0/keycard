@@ -1,0 +1,10 @@
+{
+  "name": "keycard",
+  "private": true,
+  "license": "MIT",
+  "workspaces": ["apps/keycard-app"],
+  "scripts": {
+    "tauri": "npm run tauri -w keycard-app --",
+    "free-port": "npm run free-port -w keycard-app"
+  }
+}

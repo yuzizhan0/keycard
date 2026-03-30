@@ -24,6 +24,12 @@ pub enum KeycardError {
     WrongMasterPassword,
     /// Vault metadata inconsistent or tampered.
     VaultCorrupt,
+    /// Saved CLI command name not found.
+    CliFavoriteNotFound,
+    /// Saved CLI command name already exists.
+    CliFavoriteAlreadyExists,
+    /// Invalid argv JSON or empty command.
+    InvalidCliFavorite,
 }
 
 impl std::fmt::Display for KeycardError {
@@ -41,6 +47,9 @@ impl std::fmt::Display for KeycardError {
             KeycardError::ProfileAlreadyExists => write!(f, "profile already exists"),
             KeycardError::WrongMasterPassword => write!(f, "incorrect master password"),
             KeycardError::VaultCorrupt => write!(f, "vault data is corrupt or incompatible"),
+            KeycardError::CliFavoriteNotFound => write!(f, "saved CLI command not found"),
+            KeycardError::CliFavoriteAlreadyExists => write!(f, "saved CLI command name already exists"),
+            KeycardError::InvalidCliFavorite => write!(f, "invalid saved CLI command (argv)"),
         }
     }
 }
@@ -59,7 +68,10 @@ impl std::error::Error for KeycardError {
             | KeycardError::ProfileNotFound
             | KeycardError::ProfileAlreadyExists
             | KeycardError::WrongMasterPassword
-            | KeycardError::VaultCorrupt => None,
+            | KeycardError::VaultCorrupt
+            | KeycardError::CliFavoriteNotFound
+            | KeycardError::CliFavoriteAlreadyExists
+            | KeycardError::InvalidCliFavorite => None,
         }
     }
 }
