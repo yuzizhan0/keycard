@@ -1,6 +1,6 @@
 # Keycard
 
-Local-first, open-source tool to store API keys in an encrypted SQLite vault, with a desktop app (Tauri) and a `keycard` CLI for terminal workflows.
+Local-first, open-source tool to store API keys in an encrypted SQLite vault, with a desktop app (Tauri) and a `keycard` CLI for terminal workflows. The app also has a **Passwords** tab for arbitrary credentials (site logins, Wi‑Fi, etc.), separate from model/API keys.
 
 **License:** [MIT](LICENSE) · **Conduct:** [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) · **Open source (zh):** [docs/OPEN_SOURCE.md](docs/OPEN_SOURCE.md) · **Security:** [SECURITY.md](SECURITY.md)
 

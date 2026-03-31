@@ -10,7 +10,7 @@ use zeroize::Zeroizing;
 
 use crate::crypto::{derive_dek, derive_master_key, open_secret, seal_secret};
 use crate::db::open_vault;
-use crate::models::{CliFavoriteMeta, EntryMeta, ProfileMeta};
+use crate::models::{CliFavoriteMeta, EntryKind, EntryMeta, ProfileMeta};
 use crate::session::UnlockedDek;
 use crate::KeycardError;
 
@@ -167,11 +167,12 @@ impl UnlockedVault {
         alias: &str,
         tags: Option<&str>,
         secret: &[u8],
+        kind: EntryKind,
     ) -> Result<(), KeycardError> {
         let (nonce, ciphertext) = seal_secret(self.dek_for_crypto(), secret)?;
         let created_at = now_millis();
         self.conn.execute(
-            "INSERT INTO entries (id, provider, alias, tags, created_at, nonce, ciphertext) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO entries (id, provider, alias, tags, created_at, nonce, ciphertext, kind) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             (
                 id,
                 provider,
@@ -180,6 +181,7 @@ impl UnlockedVault {
                 created_at,
                 &nonce,
                 &ciphertext,
+                kind.as_db_str(),
             ),
         )?;
         Ok(())
@@ -188,15 +190,17 @@ impl UnlockedVault {
     /// List entry metadata only (no nonce, ciphertext, or plaintext secret).
     pub fn list_entries_meta(&self) -> Result<Vec<EntryMeta>, KeycardError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, provider, alias, tags, created_at FROM entries ORDER BY created_at ASC, id ASC",
+            "SELECT id, provider, alias, tags, created_at, kind FROM entries ORDER BY created_at ASC, id ASC",
         )?;
         let mapped = stmt.query_map([], |row| {
+            let kind_s: Option<String> = row.get(5)?;
             Ok(EntryMeta {
                 id: row.get(0)?,
                 provider: row.get(1)?,
                 alias: row.get(2)?,
                 tags: row.get(3)?,
                 created_at: row.get(4)?,
+                kind: EntryKind::from_db(kind_s.as_deref()),
             })
         })?;
         let mut out = Vec::new();
@@ -237,10 +241,11 @@ impl UnlockedVault {
         provider: Option<&str>,
         alias: &str,
         tags: Option<&str>,
+        kind: EntryKind,
     ) -> Result<(), KeycardError> {
         let n = self.conn.execute(
-            "UPDATE entries SET provider = ?1, alias = ?2, tags = ?3 WHERE id = ?4",
-            (provider, alias, tags, id),
+            "UPDATE entries SET provider = ?1, alias = ?2, tags = ?3, kind = ?4 WHERE id = ?5",
+            (provider, alias, tags, kind.as_db_str(), id),
         )?;
         if n == 0 {
             return Err(KeycardError::EntryNotFound);
@@ -560,6 +565,7 @@ fn meta_get(conn: &Connection, key: &str) -> Result<Option<Vec<u8>>, KeycardErro
 #[cfg(test)]
 mod tests {
     use super::{init_vault, Vault};
+    use crate::models::EntryKind;
     use std::path::PathBuf;
 
     use tempfile::tempdir;
@@ -579,7 +585,7 @@ mod tests {
         let id = Uuid::new_v4().to_string();
         let secret = b"sk-dummy-secret-for-task4";
         unlocked
-            .add_entry(&id, Some("openai"), "default", None, secret)
+            .add_entry(&id, Some("openai"), "default", None, secret, EntryKind::Api)
             .expect("add");
         let out = unlocked.get_entry_secret(&id).expect("get secret");
         assert_eq!(out, secret);
@@ -594,7 +600,7 @@ mod tests {
         let mut u = vault.unlock(password).unwrap();
         let id = Uuid::new_v4().to_string();
         let distinctive = b"XYZZY_PLAINTEXT_SECRET_99";
-        u.add_entry(&id, None, "a1", Some("t1"), distinctive)
+        u.add_entry(&id, None, "a1", Some("t1"), distinctive, EntryKind::Api)
             .unwrap();
         let metas = u.list_entries_meta().unwrap();
         assert_eq!(metas.len(), 1);
@@ -607,13 +613,29 @@ mod tests {
     }
 
     #[test]
+    fn password_entry_kind_roundtrip() {
+        let path = temp_vault_path();
+        init_vault(&path, b"p").unwrap();
+        let mut u = Vault::open(&path).unwrap().unlock(b"p").unwrap();
+        let id = Uuid::new_v4().to_string();
+        u.add_entry(&id, None, "wifi", Some("home"), b"hunter2", EntryKind::Password)
+            .unwrap();
+        let metas = u.list_entries_meta().unwrap();
+        assert_eq!(metas.len(), 1);
+        assert_eq!(metas[0].kind, EntryKind::Password);
+        assert_eq!(metas[0].alias, "wifi");
+        assert_eq!(u.get_entry_secret(&id).unwrap(), b"hunter2");
+    }
+
+    #[test]
     fn delete_update_entry() {
         let path = temp_vault_path();
         init_vault(&path, b"x").unwrap();
         let mut u = Vault::open(&path).unwrap().unlock(b"x").unwrap();
         let id = Uuid::new_v4().to_string();
-        u.add_entry(&id, Some("p"), "old", None, b"one").unwrap();
-        u.update_entry_meta(&id, Some("p2"), "new", Some("tag"))
+        u.add_entry(&id, Some("p"), "old", None, b"one", EntryKind::Api)
+            .unwrap();
+        u.update_entry_meta(&id, Some("p2"), "new", Some("tag"), EntryKind::Api)
             .unwrap();
         let m = u.list_entries_meta().unwrap();
         assert_eq!(m[0].alias, "new");
@@ -655,7 +677,7 @@ mod tests {
         init_vault(&path, b"x").unwrap();
         let mut u = Vault::open(&path).unwrap().unlock(b"x").unwrap();
         let entry_id = Uuid::new_v4().to_string();
-        u.add_entry(&entry_id, Some("openai"), "default", None, b"sk-test")
+        u.add_entry(&entry_id, Some("openai"), "default", None, b"sk-test", EntryKind::Api)
             .unwrap();
         u.add_profile("p-dev", "dev").unwrap();
         u.set_profile_env("p-dev", "OPENAI_API_KEY", &entry_id)

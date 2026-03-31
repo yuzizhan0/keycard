@@ -1,7 +1,7 @@
 //! Integration tests; use `KEYCARD_ALLOW_ENV_PASSWORD=1` + `KEYCARD_MASTER_PASSWORD` only in CI/tests.
 
 use assert_cmd::Command;
-use keycard_core::{init_vault, Vault};
+use keycard_core::{init_vault, EntryKind, Vault};
 use tempfile::tempdir;
 
 fn bin() -> Command {
@@ -14,8 +14,15 @@ fn env_prints_export_for_profile() {
     let db = dir.path().join("vault.db");
     init_vault(&db, b"masterpass").unwrap();
     let mut u = Vault::open(&db).unwrap().unlock(b"masterpass").unwrap();
-    u.add_entry("e-openai", Some("openai"), "k1", None, b"sk-testvalue-abc")
-        .unwrap();
+    u.add_entry(
+        "e-openai",
+        Some("openai"),
+        "k1",
+        None,
+        b"sk-testvalue-abc",
+        EntryKind::Api,
+    )
+    .unwrap();
     u.add_profile("prof-a", "dev").unwrap();
     u.set_profile_env("prof-a", "OPENAI_API_KEY", "e-openai").unwrap();
     drop(u);
@@ -45,7 +52,8 @@ fn wrong_password_stderr_must_not_leak_secret() {
     let db = dir.path().join("vault.db");
     init_vault(&db, b"right-pass").unwrap();
     let mut u = Vault::open(&db).unwrap().unlock(b"right-pass").unwrap();
-    u.add_entry("e1", None, "x", None, b"sk-fake-UNIQUE-LEAK-TEST").unwrap();
+    u.add_entry("e1", None, "x", None, b"sk-fake-UNIQUE-LEAK-TEST", EntryKind::Api)
+        .unwrap();
     u.add_profile("p1", "p").unwrap();
     u.set_profile_env("p1", "K", "e1").unwrap();
     drop(u);

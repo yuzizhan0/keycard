@@ -378,6 +378,34 @@ select.lang-select {
   margin-top: 0;
 }
 
+.entry-kind-fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 0.85rem 0.85rem;
+  margin-top: 0.65rem;
+}
+
+.entry-kind-fieldset > legend {
+  padding: 0 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.radio-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.45rem;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.radio-row input {
+  width: auto;
+  margin: 0;
+}
+
 label {
   display: block;
   margin: 0.5rem 0 0.3rem;

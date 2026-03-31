@@ -89,7 +89,12 @@ fn add_entry_cmd(
     alias: String,
     tags: Option<String>,
     secret: String,
+    kind: Option<String>,
 ) -> Result<(), String> {
+    let entry_kind = match kind.as_deref() {
+        Some("password") => keycard_core::EntryKind::Password,
+        _ => keycard_core::EntryKind::Api,
+    };
     with_unlocked(&state, |mut v| {
         v.add_entry(
             &id,
@@ -97,6 +102,7 @@ fn add_entry_cmd(
             &alias,
             tags.as_deref(),
             secret.as_bytes(),
+            entry_kind,
         )
         .map_err(|e| e.to_string())
     })

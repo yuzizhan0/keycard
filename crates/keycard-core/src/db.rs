@@ -25,6 +25,7 @@ pub fn open_vault(path: &Path) -> Result<Connection, KeycardError> {
         ",
     )?;
     apply_schema_v1(&conn)?;
+    migrate_entries_kind_column(&conn)?;
     Ok(conn)
 }
 
@@ -43,7 +44,8 @@ fn apply_schema_v1(conn: &Connection) -> Result<(), KeycardError> {
             tags TEXT,
             created_at INTEGER NOT NULL,
             nonce BLOB NOT NULL,
-            ciphertext BLOB NOT NULL
+            ciphertext BLOB NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'api'
         );
 
         CREATE TABLE IF NOT EXISTS profiles (
@@ -77,6 +79,23 @@ fn apply_schema_v1(conn: &Connection) -> Result<(), KeycardError> {
             FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL
         );
         ",
+    )?;
+    Ok(())
+}
+
+/// Add `entries.kind` for vaults created before password entries existed.
+fn migrate_entries_kind_column(conn: &Connection) -> Result<(), KeycardError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(entries)")?;
+    let has_kind = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == "kind");
+    if has_kind {
+        return Ok(());
+    }
+    conn.execute(
+        "ALTER TABLE entries ADD COLUMN kind TEXT NOT NULL DEFAULT 'api'",
+        [],
     )?;
     Ok(())
 }

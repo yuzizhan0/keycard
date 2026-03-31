@@ -29,8 +29,13 @@ type Msg = {
   mainSearchPlaceholder: string;
   mainLock: string;
   mainTabSecrets: string;
+  mainTabPasswords: string;
   mainTabCli: string;
   mainTabsAria: string;
+  mainColNote: string;
+  mainAddPassword: string;
+  mainPasswordSectionHint: string;
+  labelPasswordValue: string;
   mainColAlias: string;
   mainColProvider: string;
   mainColActions: string;
@@ -58,6 +63,9 @@ type Msg = {
   quickSaveProvider: string;
   quickSaveTags: string;
   quickSaveSecret: string;
+  quickSaveEntryKind: string;
+  quickSaveKindApi: string;
+  quickSaveKindPassword: string;
   quickSaveSave: string;
   quickSaveCancel: string;
   miniUnlockHint: string;
@@ -106,8 +114,14 @@ const en: Msg = {
   mainSearchPlaceholder: "Search name, provider, tags…",
   mainLock: "Lock",
   mainTabSecrets: "Model keys",
+  mainTabPasswords: "Passwords",
   mainTabCli: "CLI commands",
   mainTabsAria: "Main sections",
+  mainColNote: "Note",
+  mainAddPassword: "Add password",
+  mainPasswordSectionHint:
+    "For site logins, Wi‑Fi, and other secrets — not model API keys. Same encryption as the rest of your vault.",
+  labelPasswordValue: "Password",
   mainColAlias: "Name",
   mainColProvider: "Provider",
   mainColActions: "",
@@ -138,6 +152,9 @@ const en: Msg = {
   quickSaveProvider: "Provider",
   quickSaveTags: "Tags",
   quickSaveSecret: "Secret",
+  quickSaveEntryKind: "Saving",
+  quickSaveKindApi: "Model / API key",
+  quickSaveKindPassword: "General password",
   quickSaveSave: "Save",
   quickSaveCancel: "Cancel",
   miniUnlockHint: "Enter master password for this vault.",
@@ -189,8 +206,14 @@ const zh: Msg = {
   mainSearchPlaceholder: "搜索名称、服务商、标签…",
   mainLock: "锁定",
   mainTabSecrets: "模型密钥",
+  mainTabPasswords: "随手密码",
   mainTabCli: "cli指令",
   mainTabsAria: "主界面分区",
+  mainColNote: "备注",
+  mainAddPassword: "添加密码",
+  mainPasswordSectionHint:
+    "网站登录、Wi‑Fi 等任意密码（非模型 API 密钥），与左侧「模型密钥」分区展示；加密方式与保险库一致。",
+  labelPasswordValue: "密码内容",
   mainColAlias: "名称",
   mainColProvider: "服务商",
   mainColActions: "",
@@ -218,6 +241,9 @@ const zh: Msg = {
   quickSaveProvider: "服务商",
   quickSaveTags: "标签",
   quickSaveSecret: "密钥",
+  quickSaveEntryKind: "保存类型",
+  quickSaveKindApi: "模型 / API 密钥",
+  quickSaveKindPassword: "任意密码",
   quickSaveSave: "保存",
   quickSaveCancel: "取消",
   miniUnlockHint: "请输入此保险库的主密码。",
@@ -268,8 +294,14 @@ const ja: Msg = {
   mainSearchPlaceholder: "名前、プロバイダー、タグを検索…",
   mainLock: "ロック",
   mainTabSecrets: "モデルキー",
+  mainTabPasswords: "パスワード",
   mainTabCli: "CLI コマンド",
   mainTabsAria: "メインの切り替え",
+  mainColNote: "メモ",
+  mainAddPassword: "パスワードを追加",
+  mainPasswordSectionHint:
+    "サイトや Wi‑Fi などの一般パスワード用です。モデル API キーとは別枠で表示されます。",
+  labelPasswordValue: "パスワード",
   mainColAlias: "名前",
   mainColProvider: "プロバイダー",
   mainColActions: "",
@@ -300,6 +332,9 @@ const ja: Msg = {
   quickSaveProvider: "プロバイダー",
   quickSaveTags: "タグ",
   quickSaveSecret: "シークレット",
+  quickSaveEntryKind: "保存する種類",
+  quickSaveKindApi: "モデル / API キー",
+  quickSaveKindPassword: "一般パスワード",
   quickSaveSave: "保存",
   quickSaveCancel: "キャンセル",
   miniUnlockHint: "このボールトのマスターパスワードを入力してください。",
@@ -350,8 +385,14 @@ const ko: Msg = {
   mainSearchPlaceholder: "이름, 제공자, 태그 검색…",
   mainLock: "잠금",
   mainTabSecrets: "모델 키",
+  mainTabPasswords: "비밀번호",
   mainTabCli: "CLI 명령",
   mainTabsAria: "메인 탭",
+  mainColNote: "메모",
+  mainAddPassword: "비밀번호 추가",
+  mainPasswordSectionHint:
+    "사이트, Wi‑Fi 등 일반 비밀번호용입니다. 모델 API 키와는 별도로 표시됩니다.",
+  labelPasswordValue: "비밀번호",
   mainColAlias: "이름",
   mainColProvider: "제공자",
   mainColActions: "",
@@ -381,6 +422,9 @@ const ko: Msg = {
   quickSaveProvider: "제공자",
   quickSaveTags: "태그",
   quickSaveSecret: "비밀 값",
+  quickSaveEntryKind: "저장 유형",
+  quickSaveKindApi: "모델 / API 키",
+  quickSaveKindPassword: "일반 비밀번호",
   quickSaveSave: "저장",
   quickSaveCancel: "취소",
   miniUnlockHint: "이 금고의 마스터 비밀번호를 입력하세요.",

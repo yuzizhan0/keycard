@@ -26,6 +26,7 @@ type EntryMeta = {
   alias: string;
   tags: string | null;
   created_at: number;
+  kind: "api" | "password";
 };
 
 type ProfileMeta = {
@@ -40,6 +41,24 @@ type CliFavoriteMeta = {
   argv: string[];
   notes: string | null;
 };
+
+async function copyEntrySecretToClipboard(id: string): Promise<void> {
+  try {
+    const text = await invoke<string>("get_secret_utf8_cmd", { id });
+    await invoke("write_clipboard_cmd", { text });
+    const sec = await invoke<string | null>("get_setting_cmd", {
+      key: "clear_clipboard_after_copy_sec",
+    });
+    const n = sec ? parseInt(sec, 10) : 0;
+    if (n > 0) {
+      setTimeout(() => {
+        invoke("write_clipboard_cmd", { text: "" }).catch(() => {});
+      }, n * 1000);
+    }
+  } catch (x) {
+    alert(String(x));
+  }
+}
 
 const appEl = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -336,11 +355,13 @@ function argvFromForm(program: string, argsLine: string): string[] {
 }
 
 const MAIN_TAB_STORAGE = "keycard_main_tab";
-type MainVaultTab = "entries" | "cli";
+type MainVaultTab = "entries" | "passwords" | "cli";
 
 function getMainVaultTab(): MainVaultTab {
   try {
-    if (localStorage.getItem(MAIN_TAB_STORAGE) === "cli") return "cli";
+    const v = localStorage.getItem(MAIN_TAB_STORAGE);
+    if (v === "cli") return "cli";
+    if (v === "passwords") return "passwords";
   } catch {
     /* private mode */
   }
@@ -456,6 +477,8 @@ async function showMain() {
   const settings = await loadSettings();
   const initialTab = getMainVaultTab();
   const tabEntriesActive = initialTab === "entries";
+  const tabPasswordsActive = initialTab === "passwords";
+  const tabCliActive = initialTab === "cli";
 
   render(`
     ${langSelectHtml({ showSettingsGear: true })}
@@ -466,7 +489,8 @@ async function showMain() {
       </div>
       <div class="main-tabs" role="tablist" aria-label="${escapeAttr(t("mainTabsAria"))}">
         <button type="button" class="main-tab" role="tab" id="tab-main-entries" aria-selected="${tabEntriesActive}" aria-controls="panel-main-entries" tabindex="${tabEntriesActive ? 0 : -1}">${escapeHtml(t("mainTabSecrets"))}</button>
-        <button type="button" class="main-tab" role="tab" id="tab-main-cli" aria-selected="${!tabEntriesActive}" aria-controls="panel-main-cli" tabindex="${tabEntriesActive ? -1 : 0}">${escapeHtml(t("mainTabCli"))}</button>
+        <button type="button" class="main-tab" role="tab" id="tab-main-passwords" aria-selected="${tabPasswordsActive}" aria-controls="panel-main-passwords" tabindex="${tabPasswordsActive ? 0 : -1}">${escapeHtml(t("mainTabPasswords"))}</button>
+        <button type="button" class="main-tab" role="tab" id="tab-main-cli" aria-selected="${tabCliActive}" aria-controls="panel-main-cli" tabindex="${tabCliActive ? 0 : -1}">${escapeHtml(t("mainTabCli"))}</button>
       </div>
       <div id="panel-main-entries" class="tab-panel" role="tabpanel" aria-labelledby="tab-main-entries" ${tabEntriesActive ? "" : "hidden"}>
         <section class="panel">
@@ -493,7 +517,28 @@ async function showMain() {
           </form>
         </section>
       </div>
-      <div id="panel-main-cli" class="tab-panel" role="tabpanel" aria-labelledby="tab-main-cli" ${tabEntriesActive ? "hidden" : ""}>
+      <div id="panel-main-passwords" class="tab-panel" role="tabpanel" aria-labelledby="tab-main-passwords" ${tabPasswordsActive ? "" : "hidden"}>
+        <section class="panel">
+          <div class="toolbar">
+            <input type="search" id="q-password" placeholder="${escapeHtml(t("mainSearchPlaceholder"))}" />
+          </div>
+          <div class="table-wrap">
+            <table class="data-table"><thead><tr><th>${escapeHtml(t("mainColAlias"))}</th><th>${escapeHtml(t("mainColNote"))}</th><th class="col-action">${escapeHtml(t("mainColActions"))}</th></tr></thead><tbody id="password-rows"></tbody></table>
+          </div>
+        </section>
+        <section class="panel">
+          <h2 class="panel-title">${escapeHtml(t("mainAddPassword"))}</h2>
+          <p class="field-hint">${escapeHtml(t("mainPasswordSectionHint"))}</p>
+          <form id="password-add-form" class="stack">
+            <label>${escapeHtml(t("labelAlias"))}</label><input name="alias" required autocomplete="off" />
+            <label>${escapeHtml(t("labelTags"))}</label><input name="tags" />
+            <label>${escapeHtml(t("labelPasswordValue"))}</label><textarea name="secret" rows="3" required autocomplete="off"></textarea>
+            <button type="submit">${escapeHtml(t("mainSaveEntry"))}</button>
+            <p class="err" id="password-add-err"></p>
+          </form>
+        </section>
+      </div>
+      <div id="panel-main-cli" class="tab-panel" role="tabpanel" aria-labelledby="tab-main-cli" ${tabCliActive ? "" : "hidden"}>
         <section class="panel">
           <h2 class="panel-title">${escapeHtml(t("cliSectionTitle"))}</h2>
           <p class="field-hint">${escapeHtml(t("cliSectionHint"))}</p>
@@ -523,24 +568,35 @@ async function showMain() {
   wireProviderPreset("#add-form");
 
   const tabBtnEntries = document.getElementById("tab-main-entries")!;
+  const tabBtnPasswords = document.getElementById("tab-main-passwords")!;
   const tabBtnCli = document.getElementById("tab-main-cli")!;
   const panelEntries = document.getElementById("panel-main-entries")!;
+  const panelPasswords = document.getElementById("panel-main-passwords")!;
   const panelCli = document.getElementById("panel-main-cli")!;
 
   function activateMainTab(tab: MainVaultTab) {
     const isEntries = tab === "entries";
+    const isPasswords = tab === "passwords";
+    const isCli = tab === "cli";
     tabBtnEntries.setAttribute("aria-selected", String(isEntries));
-    tabBtnCli.setAttribute("aria-selected", String(!isEntries));
+    tabBtnPasswords.setAttribute("aria-selected", String(isPasswords));
+    tabBtnCli.setAttribute("aria-selected", String(isCli));
     tabBtnEntries.tabIndex = isEntries ? 0 : -1;
-    tabBtnCli.tabIndex = isEntries ? -1 : 0;
+    tabBtnPasswords.tabIndex = isPasswords ? 0 : -1;
+    tabBtnCli.tabIndex = isCli ? 0 : -1;
     panelEntries.toggleAttribute("hidden", !isEntries);
-    panelCli.toggleAttribute("hidden", isEntries);
+    panelPasswords.toggleAttribute("hidden", !isPasswords);
+    panelCli.toggleAttribute("hidden", !isCli);
     setMainVaultTab(tab);
   }
 
   tabBtnEntries.addEventListener("click", () => {
     activateMainTab("entries");
     tabBtnEntries.focus();
+  });
+  tabBtnPasswords.addEventListener("click", () => {
+    activateMainTab("passwords");
+    tabBtnPasswords.focus();
   });
   tabBtnCli.addEventListener("click", () => {
     activateMainTab("cli");
@@ -558,8 +614,50 @@ async function showMain() {
     ?.addEventListener("click", () => closeSettingsModal());
   startIdleLoop();
 
+  const apiEntries = entries.filter((e) => e.kind === "api");
+  const passwordEntries = entries.filter((e) => e.kind === "password");
+
   const tbody = document.querySelector<HTMLTableSectionElement>("#rows")!;
   const q = document.querySelector<HTMLInputElement>("#q")!;
+  const passTbody =
+    document.querySelector<HTMLTableSectionElement>("#password-rows")!;
+  const qPass = document.querySelector<HTMLInputElement>("#q-password")!;
+
+  function passwordRowHtml(e: EntryMeta) {
+    const note = e.tags ?? "";
+    const tags = note.toLowerCase();
+    return `<tr data-alias="${e.alias.toLowerCase()}" data-tags="${escapeHtml(tags)}">
+      <td>${escapeHtml(e.alias)}</td><td>${escapeHtml(note)}</td>
+      <td class="col-action"><button type="button" class="secondary copy-password btn-inline" data-id="${escapeHtml(e.id)}">${escapeHtml(t("mainCopy"))}</button></td>
+    </tr>`;
+  }
+
+  function applyPasswordFilter() {
+    const qq = qPass.value.trim().toLowerCase();
+    passTbody.querySelectorAll("tr").forEach((tr) => {
+      const a = tr.getAttribute("data-alias") || "";
+      const tg = tr.getAttribute("data-tags") || "";
+      tr.style.display =
+        !qq || a.includes(qq) || tg.includes(qq) ? "" : "none";
+    });
+  }
+
+  function refreshPasswordTable(list: EntryMeta[]) {
+    passTbody.innerHTML = list.map(passwordRowHtml).join("");
+    passTbody.querySelectorAll(".copy-password").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = (btn as HTMLButtonElement).dataset.id!;
+        await copyEntrySecretToClipboard(id);
+      });
+    });
+    applyPasswordFilter();
+  }
+
+  async function reloadEntryTables() {
+    const list = await invoke<EntryMeta[]>("list_entries_json_cmd");
+    refreshTable(list.filter((e) => e.kind === "api"));
+    refreshPasswordTable(list.filter((e) => e.kind === "password"));
+  }
 
   function rowHtml(e: EntryMeta) {
     const prov = e.provider ?? "";
@@ -588,28 +686,16 @@ async function showMain() {
     tbody.querySelectorAll(".copy").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = (btn as HTMLButtonElement).dataset.id!;
-        try {
-          const text = await invoke<string>("get_secret_utf8_cmd", { id });
-          await invoke("write_clipboard_cmd", { text });
-          const sec = await invoke<string | null>("get_setting_cmd", {
-            key: "clear_clipboard_after_copy_sec",
-          });
-          const n = sec ? parseInt(sec, 10) : 0;
-          if (n > 0) {
-            setTimeout(() => {
-              invoke("write_clipboard_cmd", { text: "" }).catch(() => {});
-            }, n * 1000);
-          }
-        } catch (x) {
-          alert(String(x));
-        }
+        await copyEntrySecretToClipboard(id);
       });
     });
     applyFilter();
   }
 
-  refreshTable(entries);
+  refreshTable(apiEntries);
+  refreshPasswordTable(passwordEntries);
   q.addEventListener("input", applyFilter);
+  qPass.addEventListener("input", applyPasswordFilter);
 
   const cliTbody = document.querySelector<HTMLTableSectionElement>("#cli-rows")!;
 
@@ -726,15 +812,40 @@ async function showMain() {
         alias: String(fd.get("alias")),
         tags: String(fd.get("tags") || "") || null,
         secret: String(fd.get("secret")),
+        kind: null,
       });
       (e.target as HTMLFormElement).reset();
       hintEl.textContent = "";
-      const list = await invoke<EntryMeta[]>("list_entries_json_cmd");
-      refreshTable(list);
+      await reloadEntryTables();
     } catch (x) {
       err.textContent = String(x);
     }
   });
+
+  document.querySelector("#password-add-form")!.addEventListener(
+    "submit",
+    async (e) => {
+      e.preventDefault();
+      const err =
+        document.querySelector<HTMLParagraphElement>("#password-add-err")!;
+      err.textContent = "";
+      const fd = new FormData(e.target as HTMLFormElement);
+      try {
+        await invoke("add_entry_cmd", {
+          id: crypto.randomUUID(),
+          provider: null,
+          alias: String(fd.get("alias")),
+          tags: String(fd.get("tags") || "") || null,
+          secret: String(fd.get("secret")),
+          kind: "password",
+        });
+        (e.target as HTMLFormElement).reset();
+        await reloadEntryTables();
+      } catch (x) {
+        err.textContent = String(x);
+      }
+    },
+  );
 
   document.querySelector("#set-form")!.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -794,10 +905,17 @@ async function showQuickSave() {
       <section class="panel">
         <form id="qs-form" class="stack">
           <label>${escapeHtml(t("quickSaveAlias"))}</label><input name="alias" required />
-          <label>${escapeHtml(t("labelProviderPreset"))}</label>
-          ${providerPresetSelectHtml()}
-          <p class="field-hint">${escapeHtml(t("providerPresetHint"))}</p>
-          <label>${escapeHtml(t("quickSaveProvider"))}</label><input name="provider" />
+          <fieldset class="stack entry-kind-fieldset">
+            <legend>${escapeHtml(t("quickSaveEntryKind"))}</legend>
+            <label class="radio-row"><input type="radio" name="entry_kind" value="api" checked /> ${escapeHtml(t("quickSaveKindApi"))}</label>
+            <label class="radio-row"><input type="radio" name="entry_kind" value="password" /> ${escapeHtml(t("quickSaveKindPassword"))}</label>
+          </fieldset>
+          <div id="qs-api-only" class="stack">
+            <label>${escapeHtml(t("labelProviderPreset"))}</label>
+            ${providerPresetSelectHtml()}
+            <p class="field-hint">${escapeHtml(t("providerPresetHint"))}</p>
+            <label>${escapeHtml(t("quickSaveProvider"))}</label><input name="provider" />
+          </div>
           <label>${escapeHtml(t("quickSaveTags"))}</label><input name="tags" />
           <label>${escapeHtml(t("quickSaveSecret"))}</label><textarea name="secret" rows="4" required>${escapeHtml(clip)}</textarea>
           <p class="hint" id="qs-hint"></p>
@@ -812,6 +930,19 @@ async function showQuickSave() {
   `);
   wireHeader();
   wireProviderPreset("#qs-form");
+  const qsForm = document.getElementById("qs-form")!;
+  const syncQsApiOnly = () => {
+    const apiOnly = document.getElementById("qs-api-only");
+    const isPw =
+      qsForm.querySelector<HTMLInputElement>(
+        'input[name="entry_kind"]:checked',
+      )?.value === "password";
+    if (apiOnly) apiOnly.toggleAttribute("hidden", isPw);
+  };
+  qsForm
+    .querySelectorAll<HTMLInputElement>('input[name="entry_kind"]')
+    .forEach((el) => el.addEventListener("change", syncQsApiOnly));
+  syncQsApiOnly();
   const ta = document.querySelector<HTMLTextAreaElement>(
     '#qs-form textarea[name="secret"]',
   )!;
@@ -834,13 +965,18 @@ async function showQuickSave() {
     const fd = new FormData(e.target as HTMLFormElement);
     const secret = String(fd.get("secret"));
     const id = crypto.randomUUID();
+    const kindRaw = String(fd.get("entry_kind") || "api");
+    const isPassword = kindRaw === "password";
     try {
       await invoke("add_entry_cmd", {
         id,
-        provider: String(fd.get("provider") || "") || null,
+        provider: isPassword
+          ? null
+          : String(fd.get("provider") || "") || null,
         alias: String(fd.get("alias")),
         tags: String(fd.get("tags") || "") || null,
         secret,
+        kind: isPassword ? "password" : null,
       });
       const clear = await invoke<string | null>("get_setting_cmd", {
         key: "clear_clipboard_on_save",
@@ -971,7 +1107,7 @@ listen("open-quick-save", async () => {
     url: `/?quick=1`,
     title: windowTitleQuickSave(),
     width: 480,
-    height: 520,
+    height: 580,
     resizable: true,
   });
 });
