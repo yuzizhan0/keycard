@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 use keycard_core::{
     init_vault, vault_db_path, KeycardError, UnlockedVault, Vault,
 };
+use uuid::Uuid;
 
 #[derive(Parser)]
 #[command(name = "keycard", version, about = "Local API key vault (CLI)")]
@@ -42,7 +43,12 @@ enum Commands {
         )]
         cmd: Vec<OsString>,
     },
-    /// List or run commands saved in the vault (see desktop app).
+    /// Manage CLI projects (groups of saved commands).
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommands,
+    },
+    /// List or manage saved commands, or run one.
     Saved {
         #[command(subcommand)]
         command: SavedCommands,
@@ -50,12 +56,59 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
-enum SavedCommands {
-    /// Print saved names, optional profile id, and argv (JSON array).
+enum ProjectCommands {
+    /// List all CLI projects.
     List,
-    /// Run a saved command by name (optional profile env from vault).
+    /// Create a new CLI project.
+    Add {
+        /// Display name for the project.
+        name: String,
+    },
+    /// Delete a project and all its saved commands.
+    Delete {
+        /// Project display name or id.
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum SavedCommands {
+    /// Print saved commands. Tab-separated: project, name, profile, argv (JSON).
+    List {
+        /// Filter by project name or id.
+        #[arg(long, short = 'p', value_name = "PROJECT")]
+        project: Option<String>,
+    },
+    /// Add a new saved command.
+    Add {
+        /// Command name (unique within the project).
+        name: String,
+        /// Project name or id (default: "General").
+        #[arg(long, value_name = "PROJECT")]
+        project: Option<String>,
+        /// Profile to load env vars from.
+        #[arg(long, value_name = "PROFILE")]
+        profile: Option<String>,
+        /// Optional notes for this command.
+        #[arg(long, value_name = "TEXT")]
+        notes: Option<String>,
+        /// The command and its arguments.
+        #[arg(
+            required = true,
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            num_args = 1..
+        )]
+        cmd: Vec<String>,
+    },
+    /// Delete a saved command by name (use `project/name` if the name is ambiguous).
+    Delete {
+        /// Short name, or `project/name`.
+        name: String,
+    },
+    /// Run a saved command by name or `ProjectName/commandName` if names collide.
     Run {
-        /// Saved command name (exact match).
+        /// Short name (unique), or `project/command` using the project display name.
         name: String,
     },
 }
@@ -80,8 +133,17 @@ fn run() -> Result<(), String> {
         Commands::Init => cmd_init(&vault_path),
         Commands::Env { profile } => cmd_env(&vault_path, &profile),
         Commands::Run { profile, cmd } => cmd_run(&vault_path, &profile, cmd),
+        Commands::Project { command } => match command {
+            ProjectCommands::List => cmd_project_list(&vault_path),
+            ProjectCommands::Add { name } => cmd_project_add(&vault_path, &name),
+            ProjectCommands::Delete { name } => cmd_project_delete(&vault_path, &name),
+        },
         Commands::Saved { command } => match command {
-            SavedCommands::List => cmd_saved_list(&vault_path),
+            SavedCommands::List { project } => cmd_saved_list(&vault_path, project.as_deref()),
+            SavedCommands::Add { name, project, profile, notes, cmd } => {
+                cmd_saved_add(&vault_path, &name, project.as_deref(), profile.as_deref(), notes.as_deref(), cmd)
+            }
+            SavedCommands::Delete { name } => cmd_saved_delete(&vault_path, &name),
             SavedCommands::Run { name } => cmd_saved_run(&vault_path, &name),
         },
     }
@@ -115,15 +177,104 @@ fn cmd_run(path: &PathBuf, profile: &str, cmd: Vec<OsString>) -> Result<(), Stri
     std::process::exit(status.code().unwrap_or(1));
 }
 
-fn cmd_saved_list(path: &PathBuf) -> Result<(), String> {
+// ── project commands ─────────────────────────────────────────────────────────
+
+fn cmd_project_list(path: &PathBuf) -> Result<(), String> {
     let pw = read_password("Master password: ")?;
     let v = open_unlocked(path, pw.as_bytes())?;
-    for fav in v.list_cli_favorites().map_err(fmt_keycard_err)? {
-        let argv_json =
-            serde_json::to_string(&fav.argv).map_err(|e| e.to_string())?;
-        let prof = fav.profile_id.as_deref().unwrap_or("-");
-        println!("{}\t{}\t{}", fav.name, prof, argv_json);
+    let projects = v.list_cli_projects().map_err(fmt_keycard_err)?;
+    if projects.is_empty() {
+        eprintln!("No projects.");
+    } else {
+        for p in &projects {
+            println!("{}\t{}", p.id, p.name);
+        }
     }
+    Ok(())
+}
+
+fn cmd_project_add(path: &PathBuf, name: &str) -> Result<(), String> {
+    let pw = read_password("Master password: ")?;
+    let mut v = open_unlocked(path, pw.as_bytes())?;
+    let id = Uuid::new_v4().to_string();
+    v.add_cli_project(&id, name).map_err(fmt_keycard_err)?;
+    eprintln!("Project '{}' created (id: {}).", name, id);
+    Ok(())
+}
+
+fn cmd_project_delete(path: &PathBuf, name: &str) -> Result<(), String> {
+    let pw = read_password("Master password: ")?;
+    let mut v = open_unlocked(path, pw.as_bytes())?;
+    // accept either id or name: resolve by listing
+    let projects = v.list_cli_projects().map_err(fmt_keycard_err)?;
+    let project_id = projects
+        .iter()
+        .find(|p| p.id == name || p.name == name)
+        .map(|p| p.id.clone())
+        .ok_or_else(|| format!("project '{}' not found", name))?;
+    v.delete_cli_project(&project_id).map_err(fmt_keycard_err)?;
+    eprintln!("Project '{}' deleted.", name);
+    Ok(())
+}
+
+// ── saved commands ────────────────────────────────────────────────────────────
+
+fn cmd_saved_list(path: &PathBuf, project_filter: Option<&str>) -> Result<(), String> {
+    let pw = read_password("Master password: ")?;
+    let v = open_unlocked(path, pw.as_bytes())?;
+    let favorites = match project_filter {
+        Some(proj) => v.list_cli_favorites_by_project(proj).map_err(fmt_keycard_err)?,
+        None => v.list_cli_favorites().map_err(fmt_keycard_err)?,
+    };
+    for fav in &favorites {
+        let argv_json = serde_json::to_string(&fav.argv).map_err(|e| e.to_string())?;
+        let prof = fav.profile_id.as_deref().unwrap_or("-");
+        println!("{}\t{}\t{}\t{}", fav.project_name, fav.name, prof, argv_json);
+    }
+    Ok(())
+}
+
+fn cmd_saved_add(
+    path: &PathBuf,
+    name: &str,
+    project: Option<&str>,
+    profile: Option<&str>,
+    notes: Option<&str>,
+    cmd: Vec<String>,
+) -> Result<(), String> {
+    if cmd.is_empty() {
+        return Err("command arguments are required".into());
+    }
+    let pw = read_password("Master password: ")?;
+    let mut v = open_unlocked(path, pw.as_bytes())?;
+
+    // Resolve project: by name/id, or default to "General"
+    let project_id = if let Some(proj) = project {
+        let projects = v.list_cli_projects().map_err(fmt_keycard_err)?;
+        projects
+            .iter()
+            .find(|p| p.id == proj || p.name == proj)
+            .map(|p| p.id.clone())
+            .ok_or_else(|| format!("project '{}' not found", proj))?
+    } else {
+        // Use the default "General" project id from core
+        keycard_core::DEFAULT_CLI_PROJECT_ID.to_string()
+    };
+
+    let id = Uuid::new_v4().to_string();
+    v.add_cli_favorite(&id, &project_id, name, profile, &cmd, notes)
+        .map_err(fmt_keycard_err)?;
+    eprintln!("Saved command '{}' added (id: {}).", name, id);
+    Ok(())
+}
+
+fn cmd_saved_delete(path: &PathBuf, spec: &str) -> Result<(), String> {
+    let pw = read_password("Master password: ")?;
+    let mut v = open_unlocked(path, pw.as_bytes())?;
+    // Resolve the favorite id by spec (same project/name logic as run)
+    let fav_id = resolve_favorite_id(&v, spec)?;
+    v.delete_cli_favorite(&fav_id).map_err(fmt_keycard_err)?;
+    eprintln!("Saved command '{}' deleted.", spec);
     Ok(())
 }
 
@@ -131,12 +282,43 @@ fn cmd_saved_run(path: &PathBuf, name: &str) -> Result<(), String> {
     let pw = read_password("Master password: ")?;
     let v = open_unlocked(path, pw.as_bytes())?;
     let (argv, profile_id) = v
-        .get_cli_favorite_by_name(name)
+        .get_cli_favorite_for_run(name)
         .map_err(fmt_keycard_err)?;
     let cmd: Vec<OsString> = argv.into_iter().map(OsString::from).collect();
     let status = spawn_with_profile_env(&v, profile_id.as_deref(), cmd)?;
     std::process::exit(status.code().unwrap_or(1));
 }
+
+/// Resolve a saved command's id from a name spec (`name` or `project/name`).
+fn resolve_favorite_id(v: &UnlockedVault, spec: &str) -> Result<String, String> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return Err("command name is empty".into());
+    }
+    if let Some((proj_part, cmd_part)) = spec.split_once('/') {
+        let proj = proj_part.trim();
+        let cmd = cmd_part.trim();
+        let favs = v
+            .list_cli_favorites_by_project(proj)
+            .map_err(fmt_keycard_err)?;
+        favs.into_iter()
+            .find(|f| f.name == cmd)
+            .map(|f| f.id)
+            .ok_or_else(|| format!("saved command '{spec}' not found"))
+    } else {
+        let favs = v.list_cli_favorites().map_err(fmt_keycard_err)?;
+        let matches: Vec<_> = favs.iter().filter(|f| f.name == spec).collect();
+        match matches.len() {
+            0 => Err(format!("saved command '{spec}' not found")),
+            1 => Ok(matches[0].id.clone()),
+            _ => Err(format!(
+                "ambiguous name '{spec}'; use `project/name` to disambiguate"
+            )),
+        }
+    }
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 /// Merge optional Keycard profile env into current env and run `cmd` (non-empty argv).
 fn spawn_with_profile_env(
